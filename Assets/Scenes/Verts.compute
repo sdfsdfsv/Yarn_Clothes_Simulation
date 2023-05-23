@@ -1,0 +1,298 @@
+﻿#pragma kernel YarnMain
+
+
+RWStructuredBuffer<float3> vertices;
+
+RWStructuredBuffer<float3> velocities;
+
+int subdivision;
+
+float width;
+
+float height;
+
+float dt;
+
+float4x4 transformMatrix;
+
+float4x4 intransformMatrix;
+
+float mass;
+
+float planeHeight;
+
+float3 spherePos;
+
+float sphereRad;
+
+
+
+bool applyConstraints;
+
+float stiffnessX;
+
+float stiffnessY;
+
+
+float damping;
+
+float3 springKs;
+
+float3 springLens;
+
+
+struct ConstraintData
+{
+    float3 v1;
+    float3 v2;
+    float stiffness;
+};
+
+
+// 弹性约束
+inline ConstraintData Constrain(float3 v1, float3 v2, float stiffness)
+{
+    float distance = length(v1 - v2);
+    
+    if (distance > stiffness)
+    {
+        float3 dir = normalize(v2 - v1);
+    
+        v1 += dir * (distance - stiffness) * 0.5;
+    
+        v2 -= dir * (distance - stiffness) * 0.5;
+
+    }
+    
+    ConstraintData data;
+        
+    data.v1 = v1;
+        
+    data.v2 = v2;
+        
+    data.stiffness = stiffness;
+        
+    return data;
+    
+}
+
+//弹性力计算
+//springType 0,1,2分别代表结构弹簧、剪力弹簧、弯曲弹簧
+inline float3 getSpring(float3 v1, float3 v2, uint springType)
+{
+    float3 distanceVec = v1 - v2;
+    
+    float distance = length(distanceVec);
+    
+    float springLen = springLens[springType];
+    
+    float elasticity = springKs[springType];
+    
+    return distanceVec * (elasticity * (springLen * rcp(distance) - 1));
+}
+
+inline float3 getFriction(float3 v)
+{
+    
+}
+
+
+inline float3 AddLim(float3 vertex)
+{
+    
+    vertex.y = max(planeHeight, vertex.y);
+    
+    if (length(vertex - spherePos) < sphereRad)
+    {
+        vertex = spherePos + sphereRad * normalize(vertex - spherePos);
+    }
+    
+    return vertex;
+}
+
+inline bool inRange(int index)
+{
+    int total = subdivision * subdivision;
+    return index >= 0 && index < total;
+}
+
+inline float3 worldPos(float3 vertex)
+{
+    return mul(transformMatrix, float4(vertex, 1)).xyz;
+}
+
+inline float3 localPos(float3 vertex)
+{
+    return mul(intransformMatrix, float4(vertex, 1)).xyz;
+}
+
+[numthreads(8, 8, 1)]
+void YarnMain(uint3 id : SV_DispatchThreadID)
+{
+    
+    int index = id.y * subdivision + id.x;
+
+    float3 vertex = vertices[index];
+    
+    float3 velocity = velocities[index];
+    
+    
+    // 在这里计算模拟后的顶点坐标
+    // 将本地坐标转换为世界坐标
+    vertex = worldPos(vertex);
+    
+    if (!applyConstraints)
+    {
+        
+        float3 F = -damping * length(velocity) * velocity + float3(0, -9.8, 0) * mass;
+        
+        if (inRange(index - 1))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index - 1]), 0);
+            
+        }
+        
+        if (inRange(index + 1))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index + 1]), 0);
+            
+        }
+        
+        if (inRange(index - subdivision))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index - subdivision]), 0);
+            
+        }
+        
+        if (inRange(index + subdivision))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index + subdivision]), 0);
+            
+        }
+        
+        if (inRange(index - 1 - subdivision))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index - 1 - subdivision]), 1);
+            
+        }
+        
+        if (inRange(index + 1 - subdivision))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index + 1 - subdivision]), 1);
+            
+        }
+        
+        if (inRange(index - 1 + subdivision))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index - 1 + subdivision]), 1);
+            
+        }
+        
+        if (inRange(index + 1 + subdivision))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index + 1 + subdivision]), 1);
+            
+        }
+        
+        if (inRange(index - 2))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index - 2]), 2);
+            
+        }
+        
+        if (inRange(index + 2))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index + 2]), 2);
+            
+        }
+        
+        if (inRange(index - subdivision * 2))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index - subdivision * 2]), 2);
+            
+        }
+        
+        if (inRange(index + subdivision * 2))
+        {
+            
+            F += getSpring(vertex, worldPos(vertices[index + subdivision * 2]), 2);
+            
+        }
+        
+        float3 a = F / mass;
+        
+        velocity += a * dt;
+        
+        velocities[index] = velocity;
+        
+        vertex += velocity * dt;
+        
+    }
+        
+    
+    if (applyConstraints)
+    {
+        
+        
+        if (id.x > 0)
+        {
+            float3 left = vertices[index - 1];
+            
+            left = worldPos(left);
+            
+            ConstraintData data = Constrain(vertex, left, stiffnessX);
+                        
+            vertex = data.v1;
+            
+            left = data.v2;
+            
+            left = AddLim(left);
+            
+            left = mul(intransformMatrix, float4(left, 1)).xyz;
+            
+            vertices[index - 1] = left;
+        }
+        
+        if (id.y > 0)
+        {
+            float3 top = vertices[index - subdivision];
+            
+            top = mul(transformMatrix, float4(top, 1)).xyz;
+            
+            ConstraintData data = Constrain(vertex, top, stiffnessY);
+                                    
+            vertex = data.v1;
+            
+            top = data.v2;
+            
+            top = AddLim(top);
+            
+            top = mul(intransformMatrix, float4(top, 1)).xyz;
+            
+            vertices[index - subdivision] = top;
+        }
+        
+    
+    }
+    
+    vertex = AddLim(vertex);
+    
+    vertex = localPos(vertex);
+    
+    vertices[index] = vertex;
+
+
+}
+
+
