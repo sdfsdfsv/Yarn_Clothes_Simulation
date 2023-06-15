@@ -50,7 +50,6 @@
      <Compile Include="Assets\Scenes\VisualPoints.cs" />
      <Compile Include="Assets\Scenes\YarnMeshGenerator.cs" />
      <Compile Include="Assets\Scenes\YarnMeshUpdater.cs" />
-     <Compile Include="Assets\Scenes\TerrainMeshGenerator.cs" />
      <None Include="Assets\Scenes\Verts.compute" />
  <Reference Include="UnityEngine">
  <HintPath>D:/uhub/install/2020.3.47f1c1/Editor/Data/Managed/UnityEngine/UnityEngine.dll</HintPath>
