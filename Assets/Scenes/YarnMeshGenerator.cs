@@ -5,7 +5,6 @@ using UnityEngine;
 using UnityEditor.UI;
 using UnityEditor;
 using System.Linq;
-using static UnityEditor.Searcher.SearcherWindow.Alignment;
 
 public partial class YarnMeshGenerator : MonoBehaviour
 {
@@ -32,7 +31,7 @@ public partial class YarnMeshGenerator : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
-
+        if(fixedFramerate)
         Application.targetFrameRate = frameRate;
 
         meshFilter = GetComponent<MeshFilter>();
@@ -121,11 +120,11 @@ public class ObjectBuilderEditor : Editor
 
         YarnMeshGenerator myScript = (YarnMeshGenerator)target;
 
-        if (GUILayout.Button("´´½¨Íø¸ñ"))
+        if (GUILayout.Button("åˆ›å»ºç½‘æ ¼"))
         {
             myScript.GenerateMesh();
         }
-        if (GUILayout.Button("´´½¨¿É¼ûµã"))
+        if (GUILayout.Button("åˆ›å»ºå¯è§ç‚¹"))
         {
             myScript.VisualPoints();
         }

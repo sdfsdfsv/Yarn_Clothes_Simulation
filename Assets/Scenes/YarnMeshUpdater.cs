@@ -5,7 +5,6 @@ using UnityEngine;
 using UnityEditor.UI;
 using UnityEditor;
 using System.Linq;
-using static UnityEditor.Searcher.SearcherWindow.Alignment;
 
 public partial class YarnMeshGenerator : MonoBehaviour
 {
@@ -14,12 +13,16 @@ public partial class YarnMeshGenerator : MonoBehaviour
     [Header("update Properties")]
 
     [Space]
-    
+
+    public bool fixedFramerate;
+
     public int frameRate;
 
     public ComputeShader computeShader;
 
     public ComputeBuffer verticesBuffer;
+
+    public ComputeBuffer verticesOutBuffer;
 
     public ComputeBuffer normalsBuffer;
 
@@ -28,6 +31,8 @@ public partial class YarnMeshGenerator : MonoBehaviour
     public GameObject plane;
 
     public List<GameObject> sphereColliders;
+
+    public Vector3 windForce;
 
     public int ITERATIONS;
 
@@ -39,17 +44,19 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
     public float damping;
 
-    [Header("½á¹¹Á¦")]
+    public float frictionFactor;
+
+    [Header("ç»“æ„åŠ›")]
     public float structuralForce;
 
     public readonly float strcturalLen;
 
-    [Header("¼ôÁ¦")]
+    [Header("å‰ªåŠ›")]
     public float shearForce;
 
     public readonly float shearLen;
 
-    [Header("ÍäÇúÁ¦")]
+    [Header("å¼¯æ›²åŠ›")]
     public float flexionForce;
 
     public readonly float flexionLen;
@@ -65,55 +72,66 @@ public partial class YarnMeshGenerator : MonoBehaviour
         computeShader.SetFloat("height", height);
 
 
-        // ´´½¨Compute Buffer¶ÔÏó
+
+        // Create Compute Buffer objects
         verticesBuffer = new ComputeBuffer(mesh.vertices.Length, sizeof(float) * 3);
 
-        // ´´½¨ĞÂÊı×é
+        verticesOutBuffer = new ComputeBuffer(mesh.vertices.Length, sizeof(float) * 3);
+
+        normalsBuffer = new ComputeBuffer(mesh.normals.Length, sizeof(float) * 3);
+
+        velocitiesBuffer = new ComputeBuffer(mesh.vertices.Length, sizeof(float) * 3);
+
+
+
+        // Create new arrays
         Vector3[] newVertices = new Vector3[mesh.vertices.Length];
 
-        // Éî¿½±´Êı×é
-        Array.Copy(mesh.vertices, newVertices, mesh.vertices.Length);
+        Vector3[] newVerticesOut = new Vector3[mesh.vertices.Length];
 
-        // ½«verticesÊı×é´«ÈëCompute BufferÖĞ
-        verticesBuffer.SetData(newVertices);
-
-        // ÉèÖÃCompute ShaderÖĞµÄverticesBuffer
-        computeShader.SetBuffer(kernel, "vertices", verticesBuffer);
-
-
-        // ´´½¨Compute Buffer¶ÔÏó
-        normalsBuffer = new ComputeBuffer(mesh.vertices.Length, sizeof(float) * 3);
-
-        // ´´½¨ĞÂÊı×é
         Vector3[] newNormals = new Vector3[mesh.normals.Length];
 
-        // Éî¿½±´Êı×é
-        Array.Copy(mesh.normals, newVertices, mesh.normals.Length);
 
-        // ½«verticesÊı×é´«ÈëCompute BufferÖĞ
+
+        // Deep copy arrays
+        Array.Copy(mesh.vertices, newVertices, mesh.vertices.Length);
+
+        Array.Copy(mesh.vertices, newVerticesOut, mesh.vertices.Length);
+
+        Array.Copy(mesh.normals, newNormals, mesh.normals.Length);
+
+
+
+        // Set data to Compute Buffers
+        verticesBuffer.SetData(newVertices);
+
+        verticesOutBuffer.SetData(newVerticesOut);
+
         normalsBuffer.SetData(newNormals);
 
-        // ÉèÖÃCompute ShaderÖĞµÄverticesBuffer
-        computeShader.SetBuffer(kernel, "normals", normalsBuffer);
-
-
-        // ´´½¨Compute Buffer¶ÔÏó
-        velocitiesBuffer = new ComputeBuffer(mesh.vertices.Length, sizeof (float) * 3);
-
         velocitiesBuffer.SetData(new Vector3[mesh.vertices.Length]);
+
+
+
+        // Set Compute Shader buffers
+        computeShader.SetBuffer(kernel, "vertices", verticesBuffer);
+
+        computeShader.SetBuffer(kernel, "verticesOut", verticesOutBuffer);
+
+        computeShader.SetBuffer(kernel, "normals", normalsBuffer);
 
         computeShader.SetBuffer(kernel, "velocities", velocitiesBuffer);
 
 
-        vertices4Compute = new Vector3[subdivision * subdivision];
 
+        vertices4Compute = new Vector3[subdivision * subdivision];
     }
 
     private Vector3[] vertices4Compute;
 
     void UpComputeShader()
     {
-        // ÔÚ Compute Shader ÖĞ¼ÆËã¶¥µãÊı¾İ
+        // åœ¨ Compute Shader ä¸­è®¡ç®—é¡¶ç‚¹æ•°æ®
         int kernel = computeShader.FindKernel("YarnMain");
 
         computeShader.SetMatrix("transformMatrix", transform.localToWorldMatrix);
@@ -126,11 +144,15 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
         computeShader.SetFloat("damping", damping);
 
+        computeShader.SetFloat("frictionFactor", frictionFactor);
+
         computeShader.SetFloat("planeHeight", plane.transform.position.y+0.1f);
 
         computeShader.SetVector("spherePos", sphereColliders[0].transform.position);
 
         computeShader.SetFloat("sphereRad", sphereColliders[0].transform.localScale.x / 2);
+
+        computeShader.SetVector("windForce", windForce);
 
         computeShader.SetFloat("stiffnessX", stiffnessX);
 
@@ -138,13 +160,14 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
         computeShader.SetVector("springKs", new Vector3(structuralForce, shearForce, flexionForce));
 
-        computeShader.SetVector("springLens", new Vector3(width/(subdivision-1), width/(subdivision-1)*Mathf.Sqrt(2), 2*width/(subdivision-1)));
+        computeShader.SetVector("springLens", new Vector3(width/(subdivision-1), width/(subdivision-1)*Mathf.Sqrt(2), 2.0f*width/(subdivision-1)));
 
         computeShader.SetBool("applyConstraints", false);
 
-        computeShader.Dispatch(kernel, subdivision / 8, subdivision / 8, 1);
+        computeShader.SetBool("writeIn", false);
 
         computeShader.SetBool("applyConstraints", true);
+
 
         for (int i = 0; i < ITERATIONS; i++)
         {
@@ -152,6 +175,11 @@ public partial class YarnMeshGenerator : MonoBehaviour
             computeShader.Dispatch(kernel, subdivision / 8, subdivision / 8, 1);
         
         }
+
+        computeShader.SetBool("writeIn", true);
+
+        computeShader.Dispatch(kernel, subdivision / 8, subdivision/8,1);
+
 
         verticesBuffer.GetData(vertices4Compute);
 
@@ -176,7 +204,7 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
     void OnDestroy()
     {
-        // ÊÍ·ÅCompute Buffer¶ÔÏó
+        // é‡Šæ”¾Compute Bufferå¯¹è±¡
         verticesBuffer.Release();
 
         normalsBuffer.Release();

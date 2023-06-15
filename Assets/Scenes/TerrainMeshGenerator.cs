@@ -164,7 +164,7 @@ public class TerrainMeshEditor : Editor
         DrawDefaultInspector();
 
         TerrainMeshGenerator myScript = (TerrainMeshGenerator)target;
-        if (GUILayout.Button("´´½¨Íø¸ñ"))
+        if (GUILayout.Button("åˆ›å»ºç½‘æ ¼"))
         {
             myScript.GenerateMesh();
         }

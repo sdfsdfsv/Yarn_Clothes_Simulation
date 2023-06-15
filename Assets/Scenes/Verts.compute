@@ -1,7 +1,12 @@
 ﻿#pragma kernel YarnMain
 
+//#pragma kernel writeIn
 
 RWStructuredBuffer<float3> vertices;
+
+RWStructuredBuffer<float3> verticesOut;
+
+RWStructuredBuffer<float3> normals;
 
 RWStructuredBuffer<float3> velocities;
 
@@ -25,9 +30,12 @@ float3 spherePos;
 
 float sphereRad;
 
-
+float3 windForce;
+    
 
 bool applyConstraints;
+
+bool writeIn;
 
 float stiffnessX;
 
@@ -36,10 +44,13 @@ float stiffnessY;
 
 float damping;
 
+float frictionFactor;
+
 float3 springKs;
 
 float3 springLens;
 
+#define gravity 9.8
 
 struct ConstraintData
 {
@@ -47,7 +58,6 @@ struct ConstraintData
     float3 v2;
     float stiffness;
 };
-
 
 // 弹性约束
 inline ConstraintData Constrain(float3 v1, float3 v2, float stiffness)
@@ -80,7 +90,7 @@ inline ConstraintData Constrain(float3 v1, float3 v2, float stiffness)
 //springType 0,1,2分别代表结构弹簧、剪力弹簧、弯曲弹簧
 inline float3 getSpring(float3 v1, float3 v2, uint springType)
 {
-    float3 distanceVec = v1 - v2;
+    float3 distanceVec = v2 - v1;
     
     float distance = length(distanceVec);
     
@@ -88,11 +98,26 @@ inline float3 getSpring(float3 v1, float3 v2, uint springType)
     
     float elasticity = springKs[springType];
     
-    return distanceVec * (elasticity * (springLen * rcp(distance) - 1));
+    return normalize(distanceVec) * (elasticity * (distance - springLen));
 }
 
-inline float3 getFriction(float3 v)
+inline bool onSurface(float3 vertex)
 {
+    return vertex.y < planeHeight || length(vertex - spherePos) < sphereRad + 0.01;
+
+}
+
+inline float3 getFriction(float3 vertex, float3 velocity, float3 normal)
+{
+    if (!onSurface(vertex))
+        
+        return float3(0, 0, 0);
+    
+    float3 dir = -normalize(velocity);
+    
+    float scaleffect = dot(mass * float3(0, gravity, 0), normal) * frictionFactor;
+    
+    return dir * scaleffect;
     
 }
 
@@ -112,8 +137,7 @@ inline float3 AddLim(float3 vertex)
 
 inline bool inRange(int index)
 {
-    int total = subdivision * subdivision;
-    return index >= 0 && index < total;
+    return index >= 0 && index < subdivision * subdivision;
 }
 
 inline float3 worldPos(float3 vertex)
@@ -126,16 +150,70 @@ inline float3 localPos(float3 vertex)
     return mul(intransformMatrix, float4(vertex, 1)).xyz;
 }
 
+
+static int normalCompuDirs[4] =
+{
+    1,
+    -subdivision,
+    -1,
+    subdivision,
+};
+
+inline void updateNormal(int id)
+{
+    float3 p = worldPos(vertices[id]);
+    float3 normal = float3(0, 0, 0);
+    for (uint i = 0; i < 4; i++)
+    {
+        //01 12 23 30
+        int j = (i + 1) % 4;
+        int id1 = id + normalCompuDirs[i];
+        int id2 = id + normalCompuDirs[j];
+        if (inRange(id1) && inRange(id2))
+        {
+            float3 p1 = worldPos(vertices[id1]);
+            float3 p2 = worldPos(vertices[id2]);
+            float3 e1 = p1 - p;
+            float3 e2 = p2 - p;
+            float3 n = normalize(cross(e1, e2));
+            normal += n;
+            break;
+        }
+    }
+    normal = normalize(normal);
+    normals[id] = normal;
+}
+
+
+inline float3 getWindForce(float3 velocity, float3 normal)
+{
+    
+    return length(windForce) * (dot(normal, length(windForce) - velocity)) * normal;
+    
+}
+
+
+
 [numthreads(8, 8, 1)]
 void YarnMain(uint3 id : SV_DispatchThreadID)
 {
     
     int index = id.y * subdivision + id.x;
+    
+    if(writeIn)
+    {
+        vertices[index] = verticesOut[index];
+        
+        return;
+    }
 
     float3 vertex = vertices[index];
     
     float3 velocity = velocities[index];
     
+    updateNormal(index);
+    
+    float3 normal = normals[index];
     
     // 在这里计算模拟后的顶点坐标
     // 将本地坐标转换为世界坐标
@@ -144,7 +222,12 @@ void YarnMain(uint3 id : SV_DispatchThreadID)
     if (!applyConstraints)
     {
         
-        float3 F = -damping * length(velocity) * velocity + float3(0, -9.8, 0) * mass;
+        float3 F = -damping * length(velocity) * velocity + -float3(0, gravity, 0) * mass;
+        
+        
+        F += getFriction(vertex, velocity, normal);
+        F += getWindForce(velocity, normal);
+        
         
         if (inRange(index - 1))
         {
@@ -259,16 +342,16 @@ void YarnMain(uint3 id : SV_DispatchThreadID)
             
             left = AddLim(left);
             
-            left = mul(intransformMatrix, float4(left, 1)).xyz;
+            left = localPos(left);
             
-            vertices[index - 1] = left;
+            verticesOut[index - 1] = left;
         }
         
         if (id.y > 0)
         {
             float3 top = vertices[index - subdivision];
             
-            top = mul(transformMatrix, float4(top, 1)).xyz;
+            top = worldPos(top);
             
             ConstraintData data = Constrain(vertex, top, stiffnessY);
                                     
@@ -278,9 +361,9 @@ void YarnMain(uint3 id : SV_DispatchThreadID)
             
             top = AddLim(top);
             
-            top = mul(intransformMatrix, float4(top, 1)).xyz;
+            top = localPos(top);
             
-            vertices[index - subdivision] = top;
+            verticesOut[index - subdivision] = top;
         }
         
     
@@ -290,9 +373,17 @@ void YarnMain(uint3 id : SV_DispatchThreadID)
     
     vertex = localPos(vertex);
     
-    vertices[index] = vertex;
+    verticesOut[index] = vertex;
 
 
 }
 
 
+//[numthreads(8, 8, 1)]
+//void writeIn(uint3 id : SV_DispatchThreadID)
+//{
+//    int index = id.y * subdivision + id.x;
+    
+//    vertices[index] = verticesOut[index];
+    
+//}

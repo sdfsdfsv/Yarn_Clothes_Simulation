@@ -5,7 +5,6 @@ using UnityEngine;
 using UnityEditor.UI;
 using UnityEditor;
 using System.Linq;
-using static UnityEditor.Searcher.SearcherWindow.Alignment;
 
 public partial class YarnMeshGenerator : MonoBehaviour
 {
@@ -52,7 +51,7 @@ public partial class YarnMeshGenerator : MonoBehaviour
             }
             else
             {
-                // 实例化小球体
+                // 瀹炰緥鍖栧皬鐞冧綋
                 sphere = visualPoints[cnt] = Instantiate(pointPref,GameObject.Find("Yarn Cloth").transform);
 
                 sphere.transform.localScale = Vector3.one * 4f / subdivision ;
