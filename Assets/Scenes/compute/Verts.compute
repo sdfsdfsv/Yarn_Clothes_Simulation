@@ -33,8 +33,6 @@ float sphereRad;
 float3 windForce;
     
 
-bool applyConstraints;
-
 bool writeIn;
 
 float stiffnessX;
@@ -59,32 +57,7 @@ struct ConstraintData
     float stiffness;
 };
 
-// 弹性约束
-inline ConstraintData Constrain(float3 v1, float3 v2, float stiffness)
-{
-    float distance = length(v1 - v2);
-    
-    if (distance > stiffness)
-    {
-        float3 dir = normalize(v2 - v1);
-    
-        v1 += dir * (distance - stiffness) * 0.5;
-    
-        v2 -= dir * (distance - stiffness) * 0.5;
 
-    }
-    
-    ConstraintData data;
-        
-    data.v1 = v1;
-        
-    data.v2 = v2;
-        
-    data.stiffness = stiffness;
-        
-    return data;
-    
-}
 
 //弹性力计算
 //springType 0,1,2分别代表结构弹簧、剪力弹簧、弯曲弹簧
@@ -200,7 +173,7 @@ void YarnMain(uint3 id : SV_DispatchThreadID)
     
     int index = id.y * subdivision + id.x;
     
-    if(writeIn)
+    if (writeIn)
     {
         vertices[index] = verticesOut[index];
         
@@ -219,156 +192,110 @@ void YarnMain(uint3 id : SV_DispatchThreadID)
     // 将本地坐标转换为世界坐标
     vertex = worldPos(vertex);
     
-    if (!applyConstraints)
+ 
+    float3 F = -damping * length(velocity) * velocity + -float3(0, gravity, 0) * mass;
+        
+        
+    F += getFriction(vertex, velocity, normal);
+    F += getWindForce(velocity, normal);
+        
+        
+    if (inRange(index - 1))
     {
-        
-        float3 F = -damping * length(velocity) * velocity + -float3(0, gravity, 0) * mass;
-        
-        
-        F += getFriction(vertex, velocity, normal);
-        F += getWindForce(velocity, normal);
-        
-        
-        if (inRange(index - 1))
-        {
             
-            F += getSpring(vertex, worldPos(vertices[index - 1]), 0);
+        F += getSpring(vertex, worldPos(vertices[index - 1]), 0);
             
-        }
-        
-        if (inRange(index + 1))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index + 1]), 0);
-            
-        }
-        
-        if (inRange(index - subdivision))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index - subdivision]), 0);
-            
-        }
-        
-        if (inRange(index + subdivision))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index + subdivision]), 0);
-            
-        }
-        
-        if (inRange(index - 1 - subdivision))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index - 1 - subdivision]), 1);
-            
-        }
-        
-        if (inRange(index + 1 - subdivision))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index + 1 - subdivision]), 1);
-            
-        }
-        
-        if (inRange(index - 1 + subdivision))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index - 1 + subdivision]), 1);
-            
-        }
-        
-        if (inRange(index + 1 + subdivision))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index + 1 + subdivision]), 1);
-            
-        }
-        
-        if (inRange(index - 2))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index - 2]), 2);
-            
-        }
-        
-        if (inRange(index + 2))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index + 2]), 2);
-            
-        }
-        
-        if (inRange(index - subdivision * 2))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index - subdivision * 2]), 2);
-            
-        }
-        
-        if (inRange(index + subdivision * 2))
-        {
-            
-            F += getSpring(vertex, worldPos(vertices[index + subdivision * 2]), 2);
-            
-        }
-        
-        float3 a = F / mass;
-        
-        velocity += a * dt;
-        
-        velocities[index] = velocity;
-        
-        vertex += velocity * dt;
-        
     }
         
-    
-    if (applyConstraints)
+    if (inRange(index + 1))
     {
-        
-        
-        if (id.x > 0)
-        {
-            float3 left = vertices[index - 1];
             
-            left = worldPos(left);
+        F += getSpring(vertex, worldPos(vertices[index + 1]), 0);
             
-            ConstraintData data = Constrain(vertex, left, stiffnessX);
-                        
-            vertex = data.v1;
-            
-            left = data.v2;
-            
-            left = AddLim(left);
-            
-            left = localPos(left);
-            
-            verticesOut[index - 1] = left;
-        }
-        
-        if (id.y > 0)
-        {
-            float3 top = vertices[index - subdivision];
-            
-            top = worldPos(top);
-            
-            ConstraintData data = Constrain(vertex, top, stiffnessY);
-                                    
-            vertex = data.v1;
-            
-            top = data.v2;
-            
-            top = AddLim(top);
-            
-            top = localPos(top);
-            
-            verticesOut[index - subdivision] = top;
-        }
-        
-    
     }
+        
+    if (inRange(index - subdivision))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index - subdivision]), 0);
+            
+    }
+        
+    if (inRange(index + subdivision))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index + subdivision]), 0);
+            
+    }
+        
+    if (inRange(index - 1 - subdivision))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index - 1 - subdivision]), 1);
+            
+    }
+        
+    if (inRange(index + 1 - subdivision))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index + 1 - subdivision]), 1);
+            
+    }
+        
+    if (inRange(index - 1 + subdivision))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index - 1 + subdivision]), 1);
+            
+    }
+        
+    if (inRange(index + 1 + subdivision))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index + 1 + subdivision]), 1);
+            
+    }
+        
+    if (inRange(index - 2))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index - 2]), 2);
+            
+    }
+        
+    if (inRange(index + 2))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index + 2]), 2);
+            
+    }
+        
+    if (inRange(index - subdivision * 2))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index - subdivision * 2]), 2);
+            
+    }
+        
+    if (inRange(index + subdivision * 2))
+    {
+            
+        F += getSpring(vertex, worldPos(vertices[index + subdivision * 2]), 2);
+            
+    }
+        
+    float3 a = F / mass;
+        
+    velocity += a * dt;
+        
+    velocities[index] = velocity;
+        
+    vertex += velocity * dt;
+        
+  
+        
     
+
     vertex = AddLim(vertex);
     
     vertex = localPos(vertex);

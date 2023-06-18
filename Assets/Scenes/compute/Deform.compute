@@ -1,0 +1,246 @@
+#pragma kernel ComputeShaderKernel
+
+#define AXES_MAX_LENGTH 32
+#define DEFORMSHADER_WRKGRPSIZE 8
+// input buffer definitions ---------------------------------------------------
+
+struct XwsVertex
+{
+    float x;
+    float y;
+    float z;
+    float th;
+    float tarc;
+    float nx;
+    float ny;
+    float nz;
+    float u;
+    float v;
+    float r;
+};
+// struct definitions --------------------------------------------------------
+
+struct XmsVertex
+{
+    float u;
+    float v;
+    float h;
+    float th;
+    float nx;
+    float ny;
+    float nz;
+    float tarc;
+    uint pix;
+};
+
+struct bary
+{
+    float3 abc;
+    int tri;
+};
+
+struct AxisData
+{
+    int lenSX;
+    int lenSA;
+    int lenSY;
+    float SX[AXES_MAX_LENGTH];
+    float SA[AXES_MAX_LENGTH];
+    float SY[AXES_MAX_LENGTH];
+    float invSX[AXES_MAX_LENGTH];
+    float invSA[AXES_MAX_LENGTH];
+    float invSY[AXES_MAX_LENGTH];
+};
+
+struct float6
+{
+    float x;
+    float y;
+    float z;
+    float w;
+    float a;
+    float b;
+};
+
+
+
+RWStructuredBuffer<XwsVertex> buf_Xws;
+StructuredBuffer<XmsVertex> buf_Xms;
+StructuredBuffer<bary> buf_B0;
+StructuredBuffer<float6> buf_meshS;
+StructuredBuffer<uint3> buf_meshFms;
+RWStructuredBuffer<AxisData> buf_texAxes;
+StructuredBuffer<float4> buf_texData;
+
+// ----------------------------------------------------------------------------
+
+
+float deform_reference;
+float linearized_bending;
+float min_eig;
+uint num_vertices;
+
+
+// function definitions ------------------------------------------------------
+
+float4 sample_at(uint i_sx, uint i_sa, uint i_sy, uint pix)
+{
+    uint loc = i_sx + buf_texAxes[0].lenSX * (i_sa + buf_texAxes[0].lenSA * (i_sy + buf_texAxes[0].lenSY * pix));
+    return buf_texData[loc];
+}
+
+uint upper_bound(uint istart, uint iend, uint which_array, float value)
+{
+    uint i;
+    uint step;
+    uint count = iend - istart;
+    float arrvalue;
+    
+    while (count > 0)
+    {
+        step = count / 2;
+        i = istart + step;
+        
+        if (which_array == 0)
+            arrvalue = buf_texAxes[0].SX[i];
+        else if (which_array == 1)
+            arrvalue = buf_texAxes[0].SA[i];
+        else
+            arrvalue = buf_texAxes[0].SY[i];
+        
+        if (value < arrvalue)
+        {
+            count = step;
+        }
+        else
+        {
+            istart = i + 1;
+            count -= step + 1;
+        }
+    }
+    
+    return istart;
+}
+
+float4 sample3D(float3 strain, uint pix)
+{
+    float a_sx, a_sa, a_sy;
+    uint i_sx, i_sa, i_sy;
+
+    i_sx = upper_bound(1, buf_texAxes[0].lenSX - 1, 0, strain.x) - 1;
+    i_sa = upper_bound(1, buf_texAxes[0].lenSA - 1, 1, strain.y) - 1;
+    i_sy = upper_bound(1, buf_texAxes[0].lenSY - 1, 2, strain.z) - 1;
+    a_sx = (strain.x - buf_texAxes[0].SX[i_sx]) * buf_texAxes[0].invSX[i_sx];
+    a_sa = (strain.y - buf_texAxes[0].SA[i_sa]) * buf_texAxes[0].invSA[i_sa];
+    a_sy = (strain.z - buf_texAxes[0].SY[i_sy]) * buf_texAxes[0].invSY[i_sy];
+
+    a_sx = clamp(a_sx, 0.0f, 1.0f);
+    a_sa = clamp(a_sa, 0.0f, 1.0f);
+    a_sy = clamp(a_sy, 0.0f, 1.0f);
+
+    float4 d =
+        (1 - a_sx) * (1 - a_sa) * (1 - a_sy) * sample_at(i_sx, i_sa, i_sy, pix);
+    d += (1 - a_sx) * (1 - a_sa) * a_sy * sample_at(i_sx, i_sa, i_sy + 1, pix);
+    d += (1 - a_sx) * a_sa * (1 - a_sy) * sample_at(i_sx, i_sa + 1, i_sy, pix);
+    d += (1 - a_sx) * a_sa * a_sy * sample_at(i_sx, i_sa + 1, i_sy + 1, pix);
+    d += a_sx * (1 - a_sa) * (1 - a_sy) * sample_at(i_sx + 1, i_sa, i_sy, pix);
+    d += a_sx * (1 - a_sa) * a_sy * sample_at(i_sx + 1, i_sa, i_sy + 1, pix);
+    d += a_sx * a_sa * (1 - a_sy) * sample_at(i_sx + 1, i_sa + 1, i_sy, pix);
+    d += a_sx * a_sa * a_sy * sample_at(i_sx + 1, i_sa + 1, i_sy + 1, pix);
+
+    return d;
+}
+
+void symmetric_eig_clamp(inout float3 m, float mineigval)
+{
+    float ab = (m.x - m.z);
+    float d = 4.0f * m.y * m.y + ab * ab;
+    
+    if (d < 0.0001f)
+    {
+        float l12 = m.x;
+        l12 = max(l12, mineigval);
+        m.x = l12;
+        m.z = l12;
+    }
+    else
+    {
+        d = sqrt(d);
+        float l1 = (m.x + m.z - d) * 0.5f;
+        float l2 = (m.x + m.z + d) * 0.5f;
+        l1 = max(l1, mineigval);
+        l2 = max(l2, mineigval);
+        float A = (l2 - l1);
+        float B = d * (l1 + l2);
+        float C = A * ab;
+        float inv2d = 0.5f / d;
+        m.x = (B + C) * inv2d;
+        m.z = (B - C) * inv2d;
+        m.y *= 2.0f * A * inv2d;
+    }
+}
+
+// main compute shader function ------------------------------------------------
+
+[numthreads(DEFORMSHADER_WRKGRPSIZE, 1, 1)]
+void ComputeShaderKernel(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    uint vix = dispatchThreadId.x;
+    if (vix >= num_vertices)
+        return;
+
+    bary B0 = buf_B0[vix];
+    int tri = B0.tri;
+
+    if (tri < 0)
+        return;
+
+    XmsVertex Xms = buf_Xms[vix];
+    XwsVertex Xws;
+
+    Xws.x = Xms.u;
+    Xws.y = Xms.v;
+    Xws.z = Xms.h;
+    Xws.th = Xms.th;
+    Xws.tarc = Xms.tarc;
+    Xws.nx = Xms.nx;
+    Xws.ny = Xms.ny;
+    Xws.nz = Xms.nz;
+    Xws.u = Xms.u;
+    Xws.v = Xms.v;
+    Xws.r = 1.0f;
+
+    if (deform_reference < 0.0001f)
+    {
+        buf_Xws[vix] = Xws;
+        return;
+    }
+
+    float3 abc = B0.abc;
+
+    float3 strain = float3(0.0f, 0.0f, 0.0f);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        float6 s = buf_meshS[buf_meshFms[tri][i]];
+        strain += (float3(s.x, s.y, s.z) - linearized_bending * 2.0f * Xms.h * float3(s.w, s.a, s.b)) * abc[i];
+    }
+
+    if (min_eig > 0.0f)
+        symmetric_eig_clamp(strain, min_eig);
+
+    float3 strain_actual = float3(
+        sqrt(strain.x) - 1.0f,
+        strain.y / sqrt(strain.x * strain.z),
+        sqrt(strain.z) - 1.0f
+    );
+
+    float4 d = deform_reference * sample3D(strain_actual, Xms.pix);
+
+    Xws.x += d.x;
+    Xws.y += d.y;
+    Xws.z += d.z;
+    Xws.th += d.w;
+
+    buf_Xws[vix] = Xws;
+}

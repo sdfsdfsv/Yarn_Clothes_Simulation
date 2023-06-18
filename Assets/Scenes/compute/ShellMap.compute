@@ -1,0 +1,170 @@
+#pragma kernel ComputeShaderFunction
+#define SHELLMAPSHADER_WRKGRPSIZE 8
+struct _vertices
+{
+    float x;
+    float y;
+    float z;
+    float th;
+    float tarc;
+    float nx;
+    float ny;
+    float nz;
+    float u;
+    float v;
+    float r;
+};
+
+struct _bary
+{
+    float a;
+    float b;
+    float c;
+    int id;
+};
+
+struct _alignedvec3
+{
+    float x;
+    float y;
+    float z;
+};
+
+struct _aligneduvec3
+{
+    uint x;
+    uint y;
+    uint z;
+};
+
+struct _DiU
+{
+    float2 Dcol0;
+    float2 Dcol1;
+    float2 U0;
+};
+
+struct _defF
+{
+    float F11;
+    float F21;
+    float F31;
+    float F12;
+    float F22;
+    float F32;
+};
+
+StructuredBuffer<_vertices> buf_Xws;
+StructuredBuffer<_bary> buf_B0;
+StructuredBuffer<_alignedvec3> buf_NNv;
+StructuredBuffer<_alignedvec3> buf_meshX;
+StructuredBuffer<uint3> buf_meshF;
+StructuredBuffer<uint3> buf_meshFms;
+StructuredBuffer<_DiU> buf_meshDinvU;
+StructuredBuffer<_defF> buf_meshdefF;
+StructuredBuffer<_defF> buf_meshdefFv;
+StructuredBuffer<float2> buf_meshU;
+RWStructuredBuffer<_vertices> buf_Xws_output;
+
+uniform uint num_vertices;
+uniform float phong_deformation;
+
+
+
+float2x3 to_matrix(_defF F)
+{
+    float2x3 M;
+    M[0] = float3(F.F11, F.F21, F.F31);
+    M[1] = float3(F.F12, F.F22, F.F32);
+    return M;
+}
+
+[numthreads(SHELLMAPSHADER_WRKGRPSIZE, 1, 1)]
+void ComputeShaderFunction(uint3 id : SV_DispatchThreadID)
+{
+    uint vix = id.x;
+    if (vix >= num_vertices) // incase of num_vertices incompatible with workgroup size
+        return;
+
+    int tri = buf_B0[vix].id;
+
+    if (tri < 0) // skip 'deleted' vertices
+        return;
+
+    _vertices V = buf_Xws[vix];
+
+    // recompute barycentric coordinates (assumed same triangle after displacement)
+    float3 abc;
+    {
+        float2 p = float2(V.x, V.y);
+        _DiU DiU = buf_meshDinvU[tri];
+        float2x2 Dinv = float2x2(DiU.Dcol0, DiU.Dcol1);
+        float2 bc = mul(Dinv, (p - DiU.U0));
+        abc = float3(1 - bc.x - bc.y, bc.x, bc.y);
+    }
+
+    // barycentrically mapped position in triangle
+    uint3 ws_ixs = buf_meshF[tri];
+    float3 phi = float3(0, 0, 0);
+    for (int i = 0; i < 3; ++i)
+    {
+        _alignedvec3 xi = buf_meshX[ws_ixs[i]];
+        phi += float3(xi.x, xi.y, xi.z) * abc[i];
+    }
+
+    // optional phong deformation using triangle deformation gradients defF
+    uint3 ms_ixs = buf_meshFms[tri];
+    if (phong_deformation > 0)
+    {
+        float2 p = float2(V.x, V.y);
+
+        for (int i = 0; i < 3; ++i)
+        {
+            uint ix = ms_ixs[i];
+            float3x2 defFv_i = to_matrix(buf_meshdefFv[ix]);
+            float2 u_i = buf_meshU[ix];
+            phi += phong_deformation * (
+                abc[i] * mul(defFv_i, (p - u_i))
+            );
+        }
+    }
+
+    // interpolated vertex normal
+    float3 n;
+    n = float3(0, 0, 0);
+    for (int i = 0; i < 3; ++i)
+    {
+        _alignedvec3 ni = buf_NNv[ms_ixs[i]];
+        n += float3(ni.x, ni.y, ni.z) * abc[i];
+    }
+    n = normalize(n);
+
+    // add thickness
+    float h = V.z;
+    phi += h * n;
+
+    // store
+    V.x = phi.x;
+    V.y = phi.y;
+    V.z = phi.z;
+
+    // transform reference frame director / edge normal: nx ny nz
+    {
+        // approximate transformation matrix (e.g., ignoring phong gradient,
+        // using normal at vertex position as compared to the middle of the edge, ...)
+        // works well with later reorthonormalization in the yarn shader
+        float3x3 Q = float3x3(0,0,0,0,0,0,0,0,0);
+        _defF defF = buf_meshdefF[tri]; // triangle def.grad.
+        Q[0] = float3(defF.F11, defF.F21, defF.F31);
+        Q[1] = float3(defF.F12, defF.F22, defF.F32);
+        Q[2] = n; // NOTE not orthogonal, building a sheared frame
+
+        // transform
+        float3 Qrefd1 = mul(transpose(Q), float3(V.nx, V.ny, V.nz));
+        V.nx = Qrefd1.x;
+        V.ny = Qrefd1.y;
+        V.nz = Qrefd1.z;
+    }
+
+    buf_Xws_output[vix] = V;
+}

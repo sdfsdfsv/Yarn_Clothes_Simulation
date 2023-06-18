@@ -34,6 +34,7 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
     public Vector3 windForce;
 
+    [Range(1, 20)]
     public int ITERATIONS;
 
     public float stiffnessX;
@@ -60,6 +61,7 @@ public partial class YarnMeshGenerator : MonoBehaviour
     public float flexionForce;
 
     public readonly float flexionLen;
+
 
     private void InComputeShader()
     {
@@ -138,7 +140,7 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
         computeShader.SetMatrix("intransformMatrix", transform.worldToLocalMatrix);
 
-        computeShader.SetFloat("dt", Time.deltaTime);
+        computeShader.SetFloat("dt", Time.deltaTime / ITERATIONS);
 
         computeShader.SetFloat("mass", mass);
 
@@ -146,7 +148,7 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
         computeShader.SetFloat("frictionFactor", frictionFactor);
 
-        computeShader.SetFloat("planeHeight", plane.transform.position.y+0.1f);
+        computeShader.SetFloat("planeHeight", plane.transform.position.y + 0.1f);
 
         computeShader.SetVector("spherePos", sphereColliders[0].transform.position);
 
@@ -160,27 +162,34 @@ public partial class YarnMeshGenerator : MonoBehaviour
 
         computeShader.SetVector("springKs", new Vector3(structuralForce, shearForce, flexionForce));
 
-        computeShader.SetVector("springLens", new Vector3(width/(subdivision-1), width/(subdivision-1)*Mathf.Sqrt(2), 2.0f*width/(subdivision-1)));
-
-        computeShader.SetBool("applyConstraints", false);
+        computeShader.SetVector("springLens", new Vector3(width / (subdivision - 1), width / (subdivision - 1) * Mathf.Sqrt(2), 2.0f * width / (subdivision - 1)));
 
         computeShader.SetBool("writeIn", false);
-
-        computeShader.SetBool("applyConstraints", true);
 
 
         for (int i = 0; i < ITERATIONS; i++)
         {
 
             computeShader.Dispatch(kernel, subdivision / 8, subdivision / 8, 1);
-        
+
         }
 
         computeShader.SetBool("writeIn", true);
 
-        computeShader.Dispatch(kernel, subdivision / 8, subdivision/8,1);
+        computeShader.Dispatch(kernel, subdivision / 8, subdivision / 8, 1);
 
 
+        UpdateMesh();
+
+
+
+    }
+
+
+
+
+    void UpdateMesh()
+    {
         verticesBuffer.GetData(vertices4Compute);
 
         this.mesh.vertices = vertices4Compute;
@@ -190,8 +199,6 @@ public partial class YarnMeshGenerator : MonoBehaviour
         meshFilter.sharedMesh = this.mesh;
 
         meshCollider.sharedMesh = this.mesh;
-
-     
     }
 
     void Update()
